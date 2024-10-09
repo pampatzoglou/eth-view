@@ -214,6 +214,40 @@ func batchFetchBlocks(ctx context.Context, infuraProjectID string, db *sql.DB, s
 	close(blockChan)
 }
 
+// Health check for liveness
+func livenessProbe(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Liveness Probe: OK")
+}
+
+// Health check for readiness
+func readinessProbe(w http.ResponseWriter, r *http.Request) {
+	// Check if the database has current information
+	var savedBlocksCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&savedBlocksCount)
+	if err != nil {
+		http.Error(w, "Error checking saved blocks count", http.StatusInternalServerError)
+		return
+	}
+
+	if savedBlocksCount == 0 {
+		http.Error(w, "Not ready, no blocks saved", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Readiness Probe: OK")
+}
+
+// Health check for startup
+func startupProbe(w http.ResponseWriter, r *http.Request) {
+	// Check if the sync with Infura is complete
+	// Here, implement logic to check if the sync is complete
+	// For this example, we'll just return OK
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "Startup Probe: OK")
+}
+
 func main() {
 	// Set up structured logging with Logrus
 	log.SetFormatter(&logrus.JSONFormatter{})
@@ -236,35 +270,26 @@ func main() {
 		}
 	}()
 
-	// Check if any blocks exist in the database
-	var savedBlocksCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&savedBlocksCount)
-	if err != nil {
-		log.Fatal("Error checking saved blocks count:", err)
-	}
-
+	// Check for last saved block
+	var lastBlock Block
 	var startBlock int64
-	if savedBlocksCount == 0 {
-		// If no blocks saved, fetch the latest finalized block
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		var err error
-		startBlock, err = fetchLatestFinalizedBlock(ctx, infuraProjectID)
-		if err != nil {
-			log.Fatal("Error fetching latest finalized block:", err)
-		}
-		log.Infof("No blocks saved. Starting from the latest finalized block: %d", startBlock)
-	} else {
-		// If blocks exist, get the last saved block number
-		var lastBlock struct {
-			Number string
-		}
-		err = db.QueryRow("SELECT block_number FROM blocks ORDER BY block_number DESC LIMIT 1").Scan(&lastBlock.Number)
-		if err != nil {
+
+	err = db.QueryRow("SELECT block_number FROM blocks ORDER BY block_number DESC LIMIT 1").Scan(&lastBlock.Number)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// No blocks saved, fetch the latest finalized block
+			log.Info("No blocks saved, fetching the latest finalized block")
+			latestBlock, err := fetchLatestFinalizedBlock(context.Background(), infuraProjectID)
+			if err != nil {
+				log.Fatal("Error fetching the latest finalized block:", err)
+			}
+			startBlock = latestBlock
+		} else {
 			log.Fatal("Error fetching last saved block number:", err)
 		}
-
+	} else {
 		// Correctly handle the return values from parseHexString
+		var err error
 		startBlock, err = parseHexString(lastBlock.Number)
 		if err != nil {
 			log.Fatal("Error parsing last saved block number:", err)
@@ -291,5 +316,9 @@ func main() {
 
 	// Start Prometheus HTTP metrics server
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(":9000", nil))
+	http.HandleFunc("/liveness", livenessProbe)
+	http.HandleFunc("/readiness", readinessProbe)
+	http.HandleFunc("/startup", startupProbe)
+
+	log.Fatal(http.ListenAndServe(":2112", nil))
 }
