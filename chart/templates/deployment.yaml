@@ -34,22 +34,39 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              vlaue: "info"
+            - name: INFURA_PROJECT_ID
+              value: "1111"
+            - name: ALCHEMY_API_KEY
+              value: "1111"
+            - name: ETHERSCAN_API_KEY
+              value: "1111"
+            - name: DB_HOST
+              value: "localhost"
+            - name: DB_NAME
+              value: "Hello from the environment"
+            - name: DB_USER
+              value: "Hello from the environment"
+            - name: DB_PASSWORD
+              value: "Hello from the environment"
           ports:
             - name: http
-              containerPort: {{ .Values.service.port }}
+              containerPort: 3000
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /liveness
+              path: /healthz/live
               port: http
           readinessProbe:
             httpGet:
-              path: /readiness
+              path: /healthz/ready
               port: http
           startupProbe:
             httpGet:
-              path: /startup
+              path: /healthz/startup
               port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
